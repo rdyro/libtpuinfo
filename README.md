@@ -20,7 +20,7 @@ int (*tpu_metrics)(int port, int64 *device_ids, int64 *memory_usage, int64 *tota
 
 ## Installation
 
-Download your architecture specific library from [releases](https://github.com/GoogleCloudPlatform/libtpuinfo/releases) and install 
+Download your architecture specific library from [releases](https://github.com/rdyro/libtpuinfo/releases) and install 
 ```bash
 cp libtpuinfo-linux-x86_64.so /usr/local/lib/
 ```
