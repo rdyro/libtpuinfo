@@ -5,8 +5,7 @@
 #define int64 long long
 
 int (*tpu_chip_count)(void);
-//int (*tpu_metrics)(int port, int64 *device_ids, int64 *memory_usage, int64 *total_memory, double *duty_cycle_pct, int n);
-int (*tpu_metrics)(int port, long long* device_ids_, long long* memory_usage_, long long* total_memory_, double* duty_cycle_pct_, int n);
+int (*tpu_metrics)(int port, int64 *device_ids, int64 *memory_usage, int64 *total_memory, double *duty_cycle_pct, int n);
 int (*tpu_pids)(int64 *pids, int n);
 
 char *libname = "libtpuinfo.so";
