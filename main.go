@@ -13,7 +13,7 @@ import (
 	"time"
 	"unsafe"
 
-	pb "github.com/rdyro/tpu_info_lib/tpu_info_proto"
+	pb "github.com/rdyro/libtpuinfo/tpu_info_proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

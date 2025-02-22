@@ -1,4 +1,4 @@
-module github.com/rdyro/tpu_info_lib
+module github.com/rdyro/libtpuinfo
 
 go 1.23.2
 

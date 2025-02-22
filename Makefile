@@ -1,16 +1,32 @@
+LIBNAME="libtpuinfo"
+DYLIB_EXT := so
+
 all:
 	echo "nothing to be done"
 	
 clean:
 	rm -rf lib/*
-	rm -f tpu_info_lib
+	rm -f ${LIBNAME}
 
 lib:
-	go build -buildmode=c-shared -o lib/tpu_info_lib.so
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+	CC="zig cc -target x86_64-linux-gnu -static" \
+	CXX="zig c++ -target x86_64-linux-gnu -static" \
+	LDFLAGS="-target x86_64-linux-gnu -shared" \
+	go build -buildmode=c-shared -o lib/${LIBNAME}-linux-x86_64.${DYLIB_EXT}
+
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+	CC="zig cc -target aarch64-linux-gnu -static" \
+	CXX="zig c++ -target aarch64-linux-gnu -static" \
+	LDFLAGS="-target aarch64-linux-gnu -shared" \
+	go build -buildmode=c-shared -o lib/${LIBNAME}-linux-aarch64.${DYLIB_EXT}
+
+	ln -s lib/${LIBNAME}-linux-x86_64.${DYLIB_EXT} ${LIBNAME}.${DYLIB_EXT}
 
 cmain:
 	gcc c_calling/main.c -ldl -o lib/cmain
-	./lib/cmain
+	 ./lib/cmain
+
 
 # development only #############################################################
 
