@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 	"unsafe"
+	"log"
 
 	pb "github.com/rdyro/libtpuinfo/tpu_info_proto"
 	"google.golang.org/grpc"
@@ -28,6 +29,20 @@ const (
 	googlePCIVendorID = "0x1ae0"
 	defaultGRPCPort   = 8431
 )
+
+var (
+	DebugEnabled bool = os.Getenv("LIBTPUINFO_DEBUG") == "1"
+	logger *log.Logger = nil
+)
+
+func debugLogf(format string, args ...interface{}) {
+	if logger == nil {
+		logger = log.New(os.Stderr, "[libtpuinfo]: ", log.LstdFlags)
+	}
+	if DebugEnabled {
+		logger.Printf(format, args...)	
+	}
+}
 
 type TpuChipInfo struct {
 	Name           string
@@ -116,11 +131,9 @@ func getLocalChips() (*TpuChip, int) {
 			continue // Skip this device if we can't read the vendor ID
 		}
 		vendorID := string(vendorIDBytes[:len(vendorIDBytes)-1]) //remove newline
-
 		if vendorID != googlePCIVendorID {
 			continue
 		}
-
 		deviceIDPath := filepath.Join(pciPath, "device")
 		deviceIDBytes, err := ioutil.ReadFile(deviceIDPath)
 		if err != nil {
@@ -176,49 +189,108 @@ func chipPath(chipType TpuChip, index int) string {
 	}
 }
 
+var (
+	tpuDeviceRegex = regexp.MustCompile(`^/dev/(?:accel|vfio/)\d+$`)
+	procFDPidRegex = regexp.MustCompile(`/proc/(\d+)/fd/\d+`)
+)
+
 func getChipProcessOwners() (map[string]int64, error) {
 	deviceOwners := make(map[string]int64)
 
-	links, err := filepath.Glob("/proc/*/fd/*")
+	procDir := "/proc"
+	pids, err := os.ReadDir(procDir)
 	if err != nil {
-		return nil, fmt.Errorf("glob failed: %w", err)
+		return nil, fmt.Errorf("failed to read /proc directory: %w", err)
 	}
-
-	for _, link := range links {
-		file, err := os.Readlink(link)
-		if err != nil {
-			// FileNotFoundError is expected if a process closes a file descriptor
-			// while we're iterating.  Just ignore it.  Other errors are unexpected.
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("readlink failed for %s: %w", link, err)
-		}
-
-		// Check if the file is a TPU device using a regular expression.
-		matched, err := regexp.MatchString(`^/dev/(?:accel|vfio/)\d+$`, file)
-		if err != nil {
-			return nil, fmt.Errorf("regexp match failed: %w", err)
-		}
-		if !matched {
+	for _, pidEntry := range pids {
+		if !pidEntry.IsDir() {
 			continue
 		}
 
-		// Extract the PID from the link path.
-		re := regexp.MustCompile(`/proc/(\d+)/fd/\d+`)
-		match := re.FindStringSubmatch(link)
-		if len(match) != 2 {
-			return nil, fmt.Errorf("unknown link pattern: %s", link)
+		pidStr := pidEntry.Name()
+		pid, err := strconv.ParseInt(pidStr, 10, 64)
+		if err != nil {
+			continue // Not a PID directory, skip
+		}
+		fdDir := filepath.Join(procDir, pidStr, "fd")
+		fdEntries, err := os.ReadDir(fdDir)
+		if err != nil {
+			// Process might have terminated or we don't have permissions to read /proc/<pid>/fd.
+			if os.IsNotExist(err) || os.IsPermission(err) {
+				continue // Skip to the next PID
+			}
+			return nil, fmt.Errorf("failed to read %s: %w", fdDir, err)
 		}
 
-		pid, err := strconv.ParseInt(match[1], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid PID in link %s: %w", link, err)
+		for _, fdEntry := range fdEntries {
+			fdNumStr := fdEntry.Name()
+			_, err := strconv.ParseInt(fdNumStr, 10, 64)
+			if err != nil {
+				continue // Not a file descriptor number, skip. Shouldn't really happen, but handle it.
+			}
+			fdLink := filepath.Join(fdDir, fdNumStr)
+			file, err := os.Readlink(fdLink)
+			if err != nil {
+				// FileNotFoundError is expected if a process closes a file descriptor
+				// while we're iterating.  Just ignore it.  Other errors are unexpected.
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, fmt.Errorf("readlink failed for %s: %w", fdLink, err)
+			}
+			matched := tpuDeviceRegex.MatchString(file)
+			if !matched {
+				continue
+			}
+			deviceOwners[file] = pid
 		}
-		deviceOwners[file] = pid
 	}
 	return deviceOwners, nil
 }
+
+//func getChipProcessOwners() (map[string]int64, error) {
+//	deviceOwners := make(map[string]int64)
+//
+//	links, err := filepath.Glob("/proc/*/fd/*")
+//	if err != nil {
+//		return nil, fmt.Errorf("glob failed: %w", err)
+//	}
+//	fmt.Printf("glob: %d\n", len(links))
+//
+//	for _, link := range links {
+//		file, err := os.Readlink(link)
+//		if err != nil {
+//			// FileNotFoundError is expected if a process closes a file descriptor
+//			// while we're iterating.  Just ignore it.  Other errors are unexpected.
+//			if os.IsNotExist(err) {
+//				continue
+//			}
+//			return nil, fmt.Errorf("readlink failed for %s: %w", link, err)
+//		}
+//
+//		// Check if the file is a TPU device using a regular expression.
+//		//matched, err := regexp.MatchString(`^/dev/(?:accel|vfio/)\d+$`, file)
+//		matched := tpuDeviceRegex.MatchString(file)
+//		if !matched {
+//			continue
+//		}
+//
+//		// Extract the PID from the link path.
+//		//re := regexp.MustCompile(`/proc/(\d+)/fd/\d+`)
+//		//match := re.FindStringSubmatch(link)
+//		match := procFDPidRegex.FindStringSubmatch(link)
+//		if len(match) != 2 {
+//			return nil, fmt.Errorf("unknown link pattern: %s", link)
+//		}
+//
+//		pid, err := strconv.ParseInt(match[1], 10, 64)
+//		if err != nil {
+//			return nil, fmt.Errorf("invalid PID in link %s: %w", link, err)
+//		}
+//		deviceOwners[file] = pid
+//	}
+//	return deviceOwners, nil
+//}
 
 func getSortedMetrics[T any](r *pb.MetricResponse, get_value func(g *pb.Gauge) T) ([]int, []T) {
 	metrics := r.GetMetric().GetMetrics()
@@ -263,16 +335,16 @@ func tpu_pids(pids *C.longlong, n C.int) C.int {
 		count = count * devices_per_chip
 	}
 	if count != int(n) {
-		fmt.Fprintf(os.Stderr, "Requested PIDs for %d TPU chips, but only %d found\n", n, count)
+		debugLogf("Requested PIDs for %d TPU chips, but only %d found\n", n, count)
 		return 1
 	}
 	chip_owners, err := getChipProcessOwners()
 	if err != nil || len(chip_owners)*devices_per_chip != int(n) {
-		fmt.Fprintf(os.Stderr, "Could not find TPU processes.")
+		debugLogf("Could not find TPU processes.")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, " %v\n", err)
+			debugLogf(" %v\n", err)
 		} else {
-			fmt.Fprintf(os.Stderr, " Asked for %d chips, but found %d processes\n", int(n), len(chip_owners))
+			debugLogf(" Asked for %d chips, but found %d processes\n", int(n), len(chip_owners))
 		}
 		return 2
 	}
@@ -297,7 +369,7 @@ func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong,
 		count = count * (*chip_type).Value.DevicesPerChip
 	}
 	if count != int(n) {
-		fmt.Fprintf(os.Stderr, "Requested metrics for %d TPU chips, but only %d found\n", n, count)
+		debugLogf("Requested metrics for %d TPU chips, but only %d found\n", n, count)
 		return 1
 	}
 	if int(n) == 0 {
@@ -309,7 +381,7 @@ func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong,
 	addr := fmt.Sprintf("localhost:%d", port)
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not connect to the TPU metrics GRPC server: %v\n", err)
+		debugLogf("Could not connect to the TPU metrics GRPC server: %v\n", err)
 		return 1
 	}
 	defer conn.Close()
@@ -320,31 +392,31 @@ func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong,
 	// get the metrics
 	r, err := c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: MEMORY_USAGE})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not get MEMORY_USAGE metrics: %v\n", err)
+		debugLogf("Could not get MEMORY_USAGE metrics: %v\n", err)
 		return 2
 	}
 	device_ids, memory_usage := getSortedMetrics(r, func(x *pb.Gauge) int64 { return x.GetAsInt() })
 	if count != len(device_ids) {
-		fmt.Fprintf(os.Stderr, "%d metrics found, but that doesn't match the discovered number of chips: %d\n", len(device_ids), count)
+		debugLogf("%d metrics found, but that doesn't match the discovered number of chips: %d\n", len(device_ids), count)
 		return 2
 	}
 
 	// check for number of metric agreement early before checking other metrics
 	if int(n) != len(device_ids) {
-		fmt.Fprintf(os.Stderr, "Asked for metrics for %d chips, but %d chips found\n", int(n), len(device_ids))
+		debugLogf("Asked for metrics for %d chips, but %d chips found\n", int(n), len(device_ids))
 		return 2
 	}
 
 	r, err = c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: TOTAL_MEMORY})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not get TOTAL_MEMORY metrics: %v\n", err)
+		debugLogf("Could not get TOTAL_MEMORY metrics: %v\n", err)
 		return 2
 	}
 	_, total_memory := getSortedMetrics(r, func(x *pb.Gauge) int64 { return x.GetAsInt() })
 
 	r, err = c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: DUTY_CYCLE_PCT})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not get DUTY_CYCLE_PCT metrics: %v\n", err)
+		debugLogf("Could not get DUTY_CYCLE_PCT metrics: %v\n", err)
 		return 2
 	}
 	_, duty_cycle_pct := getSortedMetrics(r, func(x *pb.Gauge) float64 { return x.GetAsDouble() })
@@ -361,7 +433,7 @@ func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong,
 	}
 	// check that the info length matches for all statistics
 	if len(device_ids) != len(memory_usage) || len(total_memory) != len(memory_usage) || len(memory_usage) != len(duty_cycle_per_core_pct) {
-		fmt.Fprintf(os.Stderr, "Lengths of metrics do not agree. len(total_memory) = %d; len(memory_usage) = %d; len(duty_cycle_per_core_pct) = %d\n",
+		debugLogf("Lengths of metrics do not agree. len(total_memory) = %d; len(memory_usage) = %d; len(duty_cycle_per_core_pct) = %d\n",
 			len(total_memory), len(memory_usage), len(duty_cycle_per_core_pct))
 		return 3
 	}
@@ -374,16 +446,21 @@ func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong,
 	return 0
 }
 
-func main() {
-	_, count := getLocalChips()
-	fmt.Printf("Found %d chips\n", count)
+type Metrics struct {
+	DeviceIDs    []int
+	MemoryUsage  []int64
+	TotalMemory  []int64
+	DutyCyclePct []float64
+}
+
+func GetMetrics() *Metrics {
 
 	// connect to the server
 	addr := "localhost:8431"
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Coudl not connect to the GRPC server: %v\n", err)
-		os.Exit(1)
+		debugLogf("Could not connect to the GRPC server: %v\n", err)
+		return nil
 	}
 	defer conn.Close()
 	c := pb.NewRuntimeMetricServiceClient(conn)
@@ -393,22 +470,22 @@ func main() {
 	// get the metrics
 	r, err := c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: MEMORY_USAGE})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not get MEMORY_USAGE metrics: %v\n", err)
-		os.Exit(1)
+		debugLogf("Could not get MEMORY_USAGE metrics: %v\n", err)
+		return nil
 	}
 	device_ids, memory_usage := getSortedMetrics(r, func(x *pb.Gauge) int64 { return x.GetAsInt() })
 
 	r, err = c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: TOTAL_MEMORY})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not get TOTAL_MEMORY metrics: %v\n", err)
-		os.Exit(1)
+		debugLogf("Could not get TOTAL_MEMORY metrics: %v\n", err)
+		return nil
 	}
 	_, total_memory := getSortedMetrics(r, func(x *pb.Gauge) int64 { return x.GetAsInt() })
 
 	r, err = c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: DUTY_CYCLE_PCT})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not get DUTY_CYCLE_PCT metrics: %v\n", err)
-		os.Exit(1)
+		debugLogf("Could not get DUTY_CYCLE_PCT metrics: %v\n", err)
+		return nil
 	}
 	_, duty_cycle_pct := getSortedMetrics(r, func(x *pb.Gauge) float64 { return x.GetAsDouble() })
 
@@ -416,32 +493,61 @@ func main() {
 	// Repeat if necessary so these responses are the same length.
 	cores_per_chip := len(total_memory) / len(duty_cycle_pct)
 	duty_cycle_per_core_pct := make([]float64, len(total_memory))
-
 	for i := 0; i < len(duty_cycle_pct); i++ {
 		for j := 0; j < cores_per_chip; j++ {
 			duty_cycle_per_core_pct[cores_per_chip*i+j] = duty_cycle_pct[i]
 		}
 	}
-	pid := int64(-1)
-	chip_owners, err := getChipProcessOwners()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not get chip owners: %v\n", err)
-		os.Exit(1)
-	}
-	for _, k := range chip_owners {
-		pid = k
-		break
-	}
 
 	// check that the info length matches for all statistics
 	if len(device_ids) != len(memory_usage) || len(total_memory) != len(memory_usage) || len(memory_usage) != len(duty_cycle_per_core_pct) {
-		fmt.Printf("Lengths of metrics do not agree. len(total_memory) = %d; len(memory_usage) = %d; len(duty_cycle_per_core_pct) = %d\n",
+		debugLogf(`Lengths of metrics do not agree. len(total_memory) = %d; 
+								len(memory_usage) = %d; len(duty_cycle_per_core_pct) = %d\n`,
 			len(total_memory), len(memory_usage), len(duty_cycle_per_core_pct))
-		os.Exit(1)
+		return nil
 	}
-	// fmt.Printf("Device Id Memory Usage Total Memory Duty Cycle Pct\n")  // skip header
-	chip_name, _ := getLocalChips()
-	for i, _ := range total_memory {
-		fmt.Printf("%d %d %d %.2f %s %d\n", device_ids[i], memory_usage[i], total_memory[i], duty_cycle_per_core_pct[i], chip_name.Value.Name, pid)
+
+	return &Metrics{device_ids, memory_usage, total_memory, duty_cycle_per_core_pct}
+}
+
+func main() {
+	DebugEnabled = true
+
+	t := time.Now()
+	chip_type, count := getLocalChips()
+	debugLogf("Finding chips takes %d us\n", time.Since(t).Microseconds())
+
+	debugLogf("Found %d chips\n", count)
+
+	pid := int64(-1)
+	for i := 0; i < 10; i++ {
+		t = time.Now()
+		chip_owners, err := getChipProcessOwners()
+		debugLogf("Finding chip process owners takes %d us\n", time.Since(t).Microseconds())
+		if err != nil {
+			debugLogf("Could not get chip owners: %v\n", err)
+			os.Exit(1)
+		}
+		for _, k := range chip_owners {
+			pid = k
+			break
+		}
+	}
+
+	for i := 0; i < 10; i++ {
+		t = time.Now()
+		metrics_ptr := GetMetrics()
+		if metrics_ptr == nil {
+			debugLogf("Could not get metrics\n")
+			debugLogf("Getting metricsd takes %d us\n", time.Since(t).Microseconds())
+		}
+		if metrics_ptr != nil {
+			metrics := *metrics_ptr
+			// fmt.Printf("Device Id Memory Usage Total Memory Duty Cycle Pct\n")  // skip header
+			for i, _ := range metrics.DeviceIDs {
+				debugLogf("%d %d %d %.2f %s %d\n", metrics.DeviceIDs[i], metrics.MemoryUsage[i], metrics.TotalMemory[i],
+					metrics.DutyCyclePct[i], chip_type.Value.Name, pid)
+			}
+		}
 	}
 }

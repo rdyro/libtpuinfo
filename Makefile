@@ -1,33 +1,41 @@
-LIBNAME="libtpuinfo"
+LIBNAME := libtpuinfo
 DYLIB_EXT := so
+LIB=${LIBNAME}.${DYLIB_EXT}
+LIB_X86_64=lib/${LIBNAME}-linux-x86_64.${DYLIB_EXT}
+LIB_AARCH64=lib/${LIBNAME}-linux-aarch64.${DYLIB_EXT}
+CC := gcc
 
-all:
-	echo "nothing to be done"
+${LIB}: main.go
+	go build -buildmode=c-shared -o ${LIB} main.go
+	rm -f ${LIBNAME}.h
+
+install: ${LIB}
+	cp ${LIB} /lib/
 	
 clean:
-	rm -rf lib/*
-	rm -f ${LIBNAME}
+	rm -f ${LIBNAME}.h ${LIB} ${LIB_X86_64} ${LIB_AARCH64} lib/*
 
-lib:
+${LIB_X86_64}: main.go
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
 	CC="zig cc -target x86_64-linux-gnu -static" \
 	CXX="zig c++ -target x86_64-linux-gnu -static" \
 	LDFLAGS="-target x86_64-linux-gnu -shared" \
-	go build -buildmode=c-shared -o lib/${LIBNAME}-linux-x86_64.${DYLIB_EXT}
+	go build -buildmode=c-shared -o ${LIB_X86_64}
 
+${LIB_AARCH64}: main.go
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
 	CC="zig cc -target aarch64-linux-gnu -static" \
 	CXX="zig c++ -target aarch64-linux-gnu -static" \
 	LDFLAGS="-target aarch64-linux-gnu -shared" \
-	go build -buildmode=c-shared -o lib/${LIBNAME}-linux-aarch64.${DYLIB_EXT}
+	go build -buildmode=c-shared -o ${LIB_AARCH64}
 
-	rm -f ${LIBNAME}.${DYLIB_EXT}
-	ln -s lib/${LIBNAME}-linux-x86_64.${DYLIB_EXT} ${LIBNAME}.${DYLIB_EXT}
+release: ${LIB_X86_64} ${LIB_AARCH64}
+	# get version of targets with .h suffix and delete them
+	rm -f $(patsubst %.so,%.h,${LIB_X86_64} ${LIB_AARCH64})
 
-cmain:
-	gcc c_calling/main.c -ldl -o lib/cmain
-	 ./lib/cmain
-
+test: ${LIB}
+	${CC} c_calling/main.c -ldl -o lib/cmain
+	LD_LIBRARY_PATH=".:${LD_LIBRARY_PATH}" ./lib/cmain
 
 # development only #############################################################
 
@@ -39,4 +47,4 @@ install_grpc:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
-.PHONY: lib regenerate_proto install_grpc cmain lib clean
+.PHONY: clean install regenerate_proto install_grpc test release
