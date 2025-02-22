@@ -26,7 +26,7 @@ const (
 
 const (
 	googlePCIVendorID = "0x1ae0"
-  defaultGRPCPort = 8431
+	defaultGRPCPort   = 8431
 )
 
 type TpuChipInfo struct {
@@ -77,36 +77,36 @@ func fromPCIDeviceID(deviceID, subsystemID string) *TpuChip {
 
 // caching chip discovery
 var (
-  tpu_chip (*TpuChip) = nil
-  chip_count int = -1
-  last_refreshed = time.Now()
+	tpu_chip       (*TpuChip) = nil
+	chip_count     int        = -1
+	last_refreshed            = time.Now()
 )
 
 const cache_duration = 3 * time.Second
 
 func isCacheValid() bool {
-  return chip_count >= 0 && last_refreshed.After(time.Now().Add(-cache_duration))
+	return chip_count >= 0 && last_refreshed.After(time.Now().Add(-cache_duration))
 }
 
 func updateCache(chip *TpuChip, count int) {
-  tpu_chip = chip
-  chip_count = count
-  last_refreshed = time.Now()
+	tpu_chip = chip
+	chip_count = count
+	last_refreshed = time.Now()
 }
 
 func getLocalChips() (*TpuChip, int) {
-  if isCacheValid() {
-    return tpu_chip, chip_count
-  }
-  cacheAndReturn := func(t *TpuChip, num int) (*TpuChip, int) {
-    updateCache(t, num)
-    return t, num
-  }
+	if isCacheValid() {
+		return tpu_chip, chip_count
+	}
+	cacheAndReturn := func(t *TpuChip, num int) (*TpuChip, int) {
+		updateCache(t, num)
+		return t, num
+	}
 
 	count := make(map[string]int)
 	files, err := filepath.Glob("/sys/bus/pci/devices/*")
 	if err != nil {
-    return cacheAndReturn(nil, 0)
+		return cacheAndReturn(nil, 0)
 	}
 
 	for _, pciPath := range files {
@@ -145,27 +145,27 @@ func getLocalChips() (*TpuChip, int) {
 		panic(fmt.Sprintf("Expected one chip type, got %v", count))
 	}
 	if len(count) == 0 {
-    return cacheAndReturn(nil, 0)
+		return cacheAndReturn(nil, 0)
 	}
 
 	//find the only entry in count
 	for name, num := range count {
 		switch name {
 		case "v2":
-      return cacheAndReturn(&V2, num)
+			return cacheAndReturn(&V2, num)
 		case "v3":
-      return cacheAndReturn(&V3, num)
+			return cacheAndReturn(&V3, num)
 		case "v4":
-      return cacheAndReturn(&V4, num)
+			return cacheAndReturn(&V4, num)
 		case "v5e":
-      return cacheAndReturn(&V5E, num)
+			return cacheAndReturn(&V5E, num)
 		case "v5p":
-      return cacheAndReturn(&V5P, num)
+			return cacheAndReturn(&V5P, num)
 		case "v6e":
-      return cacheAndReturn(&V6E, num)
+			return cacheAndReturn(&V6E, num)
 		}
 	}
-  return cacheAndReturn(nil, 0)
+	return cacheAndReturn(nil, 0)
 }
 
 func chipPath(chipType TpuChip, index int) string {
@@ -247,60 +247,70 @@ func copyValuesToC[T1 any, T2 any](c_array_ *T1, go_array []T2, convertFn func(T
 
 //export tpu_chip_count
 func tpu_chip_count() C.int {
-	_, count := getLocalChips()
+	chip_type, count := getLocalChips()
+	if chip_type != nil {
+		count = count * (*chip_type).Value.DevicesPerChip
+	}
 	return C.int(count)
 }
 
 //export tpu_pids
 func tpu_pids(pids *C.longlong, n C.int) C.int {
-	_, count := getLocalChips()
+	chip_type, count := getLocalChips()
+	devices_per_chip := 1
+	if chip_type != nil {
+		devices_per_chip = (*chip_type).Value.DevicesPerChip
+		count = count * devices_per_chip
+	}
 	if count != int(n) {
-    fmt.Fprintf(os.Stderr, "Requested PIDs for %d TPU chips, but only %d found\n", n, count)
+		fmt.Fprintf(os.Stderr, "Requested PIDs for %d TPU chips, but only %d found\n", n, count)
 		return 1
 	}
 	chip_owners, err := getChipProcessOwners()
-	if err != nil || len(chip_owners) != int(n) {
-    fmt.Fprintf(os.Stderr, "Could not find TPU processes.")
-    if err != nil {
-      fmt.Fprintf(os.Stderr, " %v\n", err)
-    } else {
-      fmt.Fprintf(os.Stderr, " Asked for %d chips, but found %d processes\n", int(n), len(chip_owners))
-    }
+	if err != nil || len(chip_owners)*devices_per_chip != int(n) {
+		fmt.Fprintf(os.Stderr, "Could not find TPU processes.")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, " %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, " Asked for %d chips, but found %d processes\n", int(n), len(chip_owners))
+		}
 		return 2
 	}
-  if len(chip_owners) != int(n) {
-    fmt.Fprintf(os.Stderr, "Did not find active TPU processes\n")
-  }
-  pids_go := (*[1 << 30]C.longlong)(unsafe.Pointer(pids))[:count:count]
+	pids_go := (*[1 << 30]C.longlong)(unsafe.Pointer(pids))[:count:count]
 	chip_paths := make([]string, 0)
 	for path, _ := range chip_owners {
 		chip_paths = append(chip_paths, path)
 	}
 	sort.Strings(chip_paths)
 	for i, path := range chip_paths {
-		pids_go[i] = C.longlong(chip_owners[path])
+		for j := 0; j < devices_per_chip; j++ {
+			pids_go[devices_per_chip*i+j] = C.longlong(chip_owners[path])
+		}
 	}
 	return 0
 }
 
 //export tpu_metrics
 func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong, total_memory_ *C.longlong, duty_cycle_pct_ *C.double, n C.int) C.int {
-	_, count := getLocalChips()
+	chip_type, count := getLocalChips()
+	if chip_type != nil {
+		count = count * (*chip_type).Value.DevicesPerChip
+	}
 	if count != int(n) {
-    fmt.Fprintf(os.Stderr, "Requested metrics for %d TPU chips, but only %d found\n", n, count)
+		fmt.Fprintf(os.Stderr, "Requested metrics for %d TPU chips, but only %d found\n", n, count)
 		return 1
 	}
-  if int(n) == 0 {
-    return 0
-  }
-  if port <= 0 {
-    port = defaultGRPCPort
-  }
+	if int(n) == 0 {
+		return 0
+	}
+	if port <= 0 {
+		port = defaultGRPCPort
+	}
 	addr := fmt.Sprintf("localhost:%d", port)
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not connect to the TPU metrics GRPC server: %v\n", err)
-    return 1
+		return 1
 	}
 	defer conn.Close()
 	c := pb.NewRuntimeMetricServiceClient(conn)
@@ -311,15 +321,15 @@ func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong,
 	r, err := c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: MEMORY_USAGE})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not get MEMORY_USAGE metrics: %v\n", err)
-    return 2
+		return 2
 	}
 	device_ids, memory_usage := getSortedMetrics(r, func(x *pb.Gauge) int64 { return x.GetAsInt() })
-  if count != len(device_ids) {
-    fmt.Fprintf(os.Stderr, "%d metrics found, but that doesn't match the discovered number of chips: %d\n", len(device_ids), count)
+	if count != len(device_ids) {
+		fmt.Fprintf(os.Stderr, "%d metrics found, but that doesn't match the discovered number of chips: %d\n", len(device_ids), count)
 		return 2
-  }
+	}
 
-  // check for number of metric agreement early before checking other metrics
+	// check for number of metric agreement early before checking other metrics
 	if int(n) != len(device_ids) {
 		fmt.Fprintf(os.Stderr, "Asked for metrics for %d chips, but %d chips found\n", int(n), len(device_ids))
 		return 2
@@ -328,14 +338,14 @@ func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong,
 	r, err = c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: TOTAL_MEMORY})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not get TOTAL_MEMORY metrics: %v\n", err)
-    return 2
+		return 2
 	}
 	_, total_memory := getSortedMetrics(r, func(x *pb.Gauge) int64 { return x.GetAsInt() })
 
 	r, err = c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: DUTY_CYCLE_PCT})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not get DUTY_CYCLE_PCT metrics: %v\n", err)
-    return 2
+		return 2
 	}
 	_, duty_cycle_pct := getSortedMetrics(r, func(x *pb.Gauge) float64 { return x.GetAsDouble() })
 
@@ -366,14 +376,14 @@ func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong,
 
 func main() {
 	_, count := getLocalChips()
-  fmt.Printf("Found %d chips\n", count)
+	fmt.Printf("Found %d chips\n", count)
 
 	// connect to the server
 	addr := "localhost:8431"
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Coudl not connect to the GRPC server: %v\n", err)
-    os.Exit(1)
+		os.Exit(1)
 	}
 	defer conn.Close()
 	c := pb.NewRuntimeMetricServiceClient(conn)
@@ -384,21 +394,21 @@ func main() {
 	r, err := c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: MEMORY_USAGE})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not get MEMORY_USAGE metrics: %v\n", err)
-    os.Exit(1)
+		os.Exit(1)
 	}
 	device_ids, memory_usage := getSortedMetrics(r, func(x *pb.Gauge) int64 { return x.GetAsInt() })
 
 	r, err = c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: TOTAL_MEMORY})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not get TOTAL_MEMORY metrics: %v\n", err)
-    os.Exit(1)
+		os.Exit(1)
 	}
 	_, total_memory := getSortedMetrics(r, func(x *pb.Gauge) int64 { return x.GetAsInt() })
 
 	r, err = c.GetRuntimeMetric(ctx, &pb.MetricRequest{MetricName: DUTY_CYCLE_PCT})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not get DUTY_CYCLE_PCT metrics: %v\n", err)
-    os.Exit(1)
+		os.Exit(1)
 	}
 	_, duty_cycle_pct := getSortedMetrics(r, func(x *pb.Gauge) float64 { return x.GetAsDouble() })
 
@@ -416,7 +426,7 @@ func main() {
 	chip_owners, err := getChipProcessOwners()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not get chip owners: %v\n", err)
-    os.Exit(1)
+		os.Exit(1)
 	}
 	for _, k := range chip_owners {
 		pid = k
@@ -427,7 +437,7 @@ func main() {
 	if len(device_ids) != len(memory_usage) || len(total_memory) != len(memory_usage) || len(memory_usage) != len(duty_cycle_per_core_pct) {
 		fmt.Printf("Lengths of metrics do not agree. len(total_memory) = %d; len(memory_usage) = %d; len(duty_cycle_per_core_pct) = %d\n",
 			len(total_memory), len(memory_usage), len(duty_cycle_per_core_pct))
-    os.Exit(1)
+		os.Exit(1)
 	}
 	// fmt.Printf("Device Id Memory Usage Total Memory Duty Cycle Pct\n")  // skip header
 	chip_name, _ := getLocalChips()

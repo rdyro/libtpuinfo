@@ -21,6 +21,7 @@ lib:
 	LDFLAGS="-target aarch64-linux-gnu -shared" \
 	go build -buildmode=c-shared -o lib/${LIBNAME}-linux-aarch64.${DYLIB_EXT}
 
+	rm -f ${LIBNAME}.${DYLIB_EXT}
 	ln -s lib/${LIBNAME}-linux-x86_64.${DYLIB_EXT} ${LIBNAME}.${DYLIB_EXT}
 
 cmain:
