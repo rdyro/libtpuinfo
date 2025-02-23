@@ -1,6 +1,9 @@
 # libtpuinfo
 
-A library for getting information about the TPU on a Google Cloud VM.
+A library for getting information about the TPU on a Google Cloud VM built by
+transcribing
+[tpu-info](https://github.com/AI-Hypercomputer/cloud-accelerator-diagnostics/tree/main/tpu_info)
+into golang.
 
 *Not an official Google product.*
 
@@ -12,23 +15,26 @@ Available C symbols are:
 int (*tpu_chip_count)(void);
 
 // Get the process IDs for all `n` TPU devices
-int (*tpu_pids)(int64 *pids, int n);
+int (*tpu_pids)(long long *pids, int n);
 
-// Get the metrics for all `n` TPU devices
-int (*tpu_metrics)(int port, int64 *device_ids, int64 *memory_usage, int64 *total_memory, double *duty_cycle_pct, int n);
+// Get the metrics for all `n` TPU devices (port <= 0 implies default 8431)
+int (*tpu_metrics)(int port, long long *device_ids, long long *memory_usage, 
+                   long long *total_memory, double *duty_cycle_pct, int n);
 ```
 
 ## Installation
 
 Download your architecture specific library from [releases](https://github.com/rdyro/libtpuinfo/releases) and install 
 ```bash
-cp libtpuinfo-linux-x86_64.so /usr/local/lib/
+cp libtpuinfo-linux-x86_64.so /usr/local/lib/libtpuinfo.so
+# or
+cp libtpuinfo-linux-aarch64.so /usr/local/lib/libtpuinfo.so
 ```
 
 ### Building from source
 
 ```bash
-git clone https://github.com/GoogleCloudPlatform/libtpuinfo.git && cd libtpuinfo
+git clone https://github.com/rdyro/libtpuinfo.git && cd libtpuinfo
 make
 sudo make install
 ```
@@ -36,8 +42,8 @@ sudo make install
 or manually
 
 ```bash
-git clone https://github.com/GoogleCloudPlatform/libtpuinfo.git
-go build -buildmode=c-shared -o ${LIB} main.go
+git clone https://github.com/rdyro/libtpuinfo.git
+go build -buildmode=c-shared -o libtpuinfo.so main.go
 sudo cp libtpuinfo.so /usr/local/lib/
 ```
 
