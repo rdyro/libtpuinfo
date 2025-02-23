@@ -46,3 +46,9 @@ sudo cp libtpuinfo.so /usr/local/lib/
 ```bash
 make test
 ```
+
+
+## Environment variables
+
+- `LIBTPUINFO_DEBUG=1` will enable debug logging.
+- `LIBTPUINFO_GRPC_PORT={int}` will set the port for the default gRPC server for TPU runtime metrics.

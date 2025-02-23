@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,7 +13,6 @@ import (
 	"strconv"
 	"time"
 	"unsafe"
-	"log"
 
 	pb "github.com/rdyro/libtpuinfo/tpu_info_proto"
 	"google.golang.org/grpc"
@@ -27,12 +27,11 @@ const (
 
 const (
 	googlePCIVendorID = "0x1ae0"
-	defaultGRPCPort   = 8431
 )
 
 var (
-	DebugEnabled bool = os.Getenv("LIBTPUINFO_DEBUG") == "1"
-	logger *log.Logger = nil
+	DebugEnabled bool        = os.Getenv("LIBTPUINFO_DEBUG") == "1"
+	logger       *log.Logger = nil
 )
 
 func debugLogf(format string, args ...interface{}) {
@@ -40,8 +39,23 @@ func debugLogf(format string, args ...interface{}) {
 		logger = log.New(os.Stderr, "[libtpuinfo]: ", log.LstdFlags)
 	}
 	if DebugEnabled {
-		logger.Printf(format, args...)	
+		logger.Printf(format, args...)
 	}
+}
+
+var defaultGRPCPort int = parse_defaultGRPCPort()
+
+func parse_defaultGRPCPort() int {
+	// if not set, attempt to parse the environment variable
+	defaultGRPCPort := 8431
+	if env_port, is_set := os.LookupEnv("LIBTPUINFO_GRPC_PORT"); is_set {
+		debugLogf("Found environment variable LIBTPUINFO_GRPC_PORT: %s\n", env_port)
+		if val, err := strconv.ParseInt(env_port, 10, 64); err == nil {
+			debugLogf("Parsed environment variable LIBTPUINFO_GRPC_PORT as int\n")
+			defaultGRPCPort = int(val)
+		}
+	}
+	return defaultGRPCPort
 }
 
 type TpuChipInfo struct {
@@ -248,50 +262,6 @@ func getChipProcessOwners() (map[string]int64, error) {
 	return deviceOwners, nil
 }
 
-//func getChipProcessOwners() (map[string]int64, error) {
-//	deviceOwners := make(map[string]int64)
-//
-//	links, err := filepath.Glob("/proc/*/fd/*")
-//	if err != nil {
-//		return nil, fmt.Errorf("glob failed: %w", err)
-//	}
-//	fmt.Printf("glob: %d\n", len(links))
-//
-//	for _, link := range links {
-//		file, err := os.Readlink(link)
-//		if err != nil {
-//			// FileNotFoundError is expected if a process closes a file descriptor
-//			// while we're iterating.  Just ignore it.  Other errors are unexpected.
-//			if os.IsNotExist(err) {
-//				continue
-//			}
-//			return nil, fmt.Errorf("readlink failed for %s: %w", link, err)
-//		}
-//
-//		// Check if the file is a TPU device using a regular expression.
-//		//matched, err := regexp.MatchString(`^/dev/(?:accel|vfio/)\d+$`, file)
-//		matched := tpuDeviceRegex.MatchString(file)
-//		if !matched {
-//			continue
-//		}
-//
-//		// Extract the PID from the link path.
-//		//re := regexp.MustCompile(`/proc/(\d+)/fd/\d+`)
-//		//match := re.FindStringSubmatch(link)
-//		match := procFDPidRegex.FindStringSubmatch(link)
-//		if len(match) != 2 {
-//			return nil, fmt.Errorf("unknown link pattern: %s", link)
-//		}
-//
-//		pid, err := strconv.ParseInt(match[1], 10, 64)
-//		if err != nil {
-//			return nil, fmt.Errorf("invalid PID in link %s: %w", link, err)
-//		}
-//		deviceOwners[file] = pid
-//	}
-//	return deviceOwners, nil
-//}
-
 func getSortedMetrics[T any](r *pb.MetricResponse, get_value func(g *pb.Gauge) T) ([]int, []T) {
 	metrics := r.GetMetric().GetMetrics()
 	metric_map := make(map[int]T)
@@ -364,6 +334,7 @@ func tpu_pids(pids *C.longlong, n C.int) C.int {
 
 //export tpu_metrics
 func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong, total_memory_ *C.longlong, duty_cycle_pct_ *C.double, n C.int) C.int {
+
 	chip_type, count := getLocalChips()
 	if chip_type != nil {
 		count = count * (*chip_type).Value.DevicesPerChip
@@ -376,7 +347,7 @@ func tpu_metrics(port C.int, device_ids_ *C.longlong, memory_usage_ *C.longlong,
 		return 0
 	}
 	if port <= 0 {
-		port = defaultGRPCPort
+		port = C.int(defaultGRPCPort)
 	}
 	addr := fmt.Sprintf("localhost:%d", port)
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -539,7 +510,7 @@ func main() {
 		metrics_ptr := GetMetrics()
 		if metrics_ptr == nil {
 			debugLogf("Could not get metrics\n")
-			debugLogf("Getting metricsd takes %d us\n", time.Since(t).Microseconds())
+			debugLogf("Getting metrics takes %d us\n", time.Since(t).Microseconds())
 		}
 		if metrics_ptr != nil {
 			metrics := *metrics_ptr

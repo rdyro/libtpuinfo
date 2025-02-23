@@ -41,7 +41,7 @@ int resolve_symbols() {
     return 0;
 
     cleanup:
-        printf("tpu_chip_count symbol cannot be resolved with error: %s\n", error_msg);
+        fprintf(stderr, "tpu_chip_count symbol cannot be resolved with error: %s\n", error_msg);
         return 1;
 }
 
@@ -49,16 +49,11 @@ int main() {
     if (resolve_symbols() != 0) return 1;
 
     int n = tpu_chip_count();
-    printf("Chip count %d\n", n);
+    fprintf(stderr, "Chip count %d\n", n);
 
     int64 *pids = malloc(n * sizeof(int64));
-    if (tpu_pids(pids, n) != 0) {
-        printf("Error retrieving pids\n");    
-        exit(1);
-    }
-    for (int i = 0; i < n; i ++) {
-        printf("PID %lld\n", pids[i]);
-    }
+    if (tpu_pids(pids, n) != 0) printf("Error retrieving pids\n");    
+    for (int i = 0; i < n; i ++) printf("PID %lld\n", pids[i]);
     
     int64 device_ids[32];
     int64 memory_usage[32];
@@ -67,12 +62,11 @@ int main() {
 
     // port <= 0 means default 8431 port
     if (tpu_metrics(-1, device_ids, memory_usage, total_memory, duty_cycle_pct, n) != 0) {
-        printf("Error retrieving usage\n");
+        fprintf(stderr, "Error retrieving usage\n");
         return 1;
     }
     for (int i = 0; i < n; i ++) {
-        printf("%lld %lld %lld %.2f\n", device_ids[i], memory_usage[i], total_memory[i], duty_cycle_pct[i]);
+        fprintf(stderr, "%lld %lld %lld %.2f\n", device_ids[i], memory_usage[i], total_memory[i], duty_cycle_pct[i]);
     }
-    
     return 0;
 }
