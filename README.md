@@ -5,8 +5,6 @@ transcribing
 [tpu-info](https://github.com/AI-Hypercomputer/cloud-accelerator-diagnostics/tree/main/tpu_info)
 into golang.
 
-*Not an official Google product.*
-
 ## API
 
 Available C symbols are:
